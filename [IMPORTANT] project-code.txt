@@ -1,0 +1,359 @@
+import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+from torch.utils.data import DataLoader, Subset
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+
+
+# Set device (GPU if available, else CPU)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+
+# Dataset path
+data_path = "plant_data"
+
+
+# Define transforms for data preprocessing
+transform = transforms.Compose([
+    transforms.Resize((128, 128)),  # Resize images
+    transforms.ToTensor(),          # Convert to tensor
+    transforms.Normalize((0.5,), (0.5,))  # Normalize
+])
+
+
+
+# Load dataset
+dataset = datasets.ImageFolder(root=data_path, transform=transform)
+
+# Extract labels for stratified splitting
+labels = np.array([label for _, label in dataset.samples])
+
+# Use StratifiedShuffleSplit to maintain class distribution
+splitter = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+train_idx, test_idx = next(splitter.split(np.zeros(len(labels)), labels))
+
+# Create train and test datasets
+train_dataset = Subset(dataset, train_idx)
+test_dataset = Subset(dataset, test_idx)
+
+# Create DataLoaders
+batch_size = 16
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+
+
+# Define CNN Model
+class CNNModel(nn.Module):
+    def __init__(self, num_classes):
+        super(CNNModel, self).__init__()
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
+        self.relu = nn.ReLU()
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.fc1 = nn.Linear(64 * 32 * 32, 128)
+        self.fc2 = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = self.pool(self.relu(self.conv1(x)))
+        x = self.pool(self.relu(self.conv2(x)))
+        x = x.view(x.size(0), -1)
+        x = self.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+# Get number of classes
+num_classes = len(dataset.classes)
+
+# Initialize model
+model = CNNModel(num_classes).to(device)
+
+# Define loss and optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+
+
+
+# Train the model
+epochs = 10
+for epoch in range(epochs):
+    model.train()
+    running_loss = 0.0
+    for images, labels in train_loader:
+        images, labels = images.to(device), labels.to(device)
+        
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        
+        running_loss += loss.item()
+    print(f"Epoch [{epoch+1}/{epochs}], Loss: {running_loss/len(train_loader):.4f}")
+
+
+
+# Save trained model
+torch.save(model.state_dict(), "plant_disease_cnn.pth")
+
+
+
+
+# Evaluate model
+true_labels = []
+pred_labels = []
+
+with torch.no_grad():
+    for images, labels in test_loader:
+        images, labels = images.to(device), labels.to(device)
+        outputs = model(images)
+        _, predicted = torch.max(outputs, 1)
+        true_labels.extend(labels.cpu().numpy())
+        pred_labels.extend(predicted.cpu().numpy())
+
+# Compute metrics
+accuracy = accuracy_score(true_labels, pred_labels)
+print(f"Model Accuracy: {accuracy * 100:.2f}%")
+print("Classification Report:")
+print(classification_report(true_labels, pred_labels, target_names=dataset.classes))
+
+
+OUTPUT OF ABOVE FUNCTION
+
+Model Accuracy: 81.83%
+Classification Report:
+                                precision    recall  f1-score   support
+
+  Apple___alternaria_leaf_spot       0.96      0.80      0.87        56
+             Apple___black_rot       0.77      0.91      0.83       124
+            Apple___brown_spot       0.78      0.84      0.81        43
+             Apple___gray_spot       0.80      0.52      0.63        79
+               Apple___healthy       0.81      0.65      0.72       514
+                  Apple___rust       0.80      0.62      0.70       248
+                  Apple___scab       0.56      0.45      0.50       244
+  Bell_pepper___bacterial_spot       0.85      0.76      0.81       199
+         Bell_pepper___healthy       0.84      0.88      0.86       296
+           Blueberry___healthy       0.91      0.98      0.94       300
+
+
+
+
+# Load trained model
+def load_model(model_path, num_classes):
+    model = CNNModel(num_classes)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
+    return model
+
+model = load_model("plant_disease_cnn.pth", num_classes)
+print("Model loaded successfully.")
+
+
+
+
+
+
+
+
+import torch.onnx
+
+# Load your trained model
+num_classes = 72  # Update if needed
+model = CNNModel(num_classes)
+model.load_state_dict(torch.load("plant_disease_cnn.pth", map_location=torch.device('cpu')))
+model.eval()
+
+# Convert model to ONNX format
+dummy_input = torch.randn(1, 3, 128, 128)  # Assuming input size (3, 128, 128)
+torch.onnx.export(model, dummy_input, "plant_disease_cnn.onnx", export_params=True)
+
+print("Model successfully exported to ONNX format!")
+
+
+
+
+===========================================
+
+APP.PY
+
+from flask import Flask, request, render_template, send_from_directory
+import torch
+from torchvision import transforms
+from PIL import Image
+import os
+import uuid  # To generate unique image filenames
+
+app = Flask(__name__, static_folder="static", template_folder="templates")
+
+# Load the trained model
+model = torch.jit.load("plant_disease_cnn_scripted.pt")  # Use the scripted model
+model.eval()
+
+# **Get class names from dataset folders**
+DATASET_PATH = "plant_data"  # Update if needed
+class_names = sorted(os.listdir(DATASET_PATH))  # Folder names as class labels
+
+# **Define upload folder**
+UPLOAD_FOLDER = "static/uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)  # Create folder if not exists
+
+# Define image preprocessing
+transform = transforms.Compose([
+    transforms.Resize((128, 128)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+
+# **Serve the HTML Page**
+@app.route("/")
+def home():
+    return render_template("index.html", prediction=None, image_url=None)
+
+# **Serve Uploaded Images**
+@app.route("/uploads/<filename>")
+def uploaded_file(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename)
+
+# disease description
+disease_descriptions = {
+    "Apple - Alternaria Leaf Spot": "A fungal disease causing dark spots with concentric rings on apple leaves.",
+    "Apple - Black Rot": "Caused by fungus, it leads to blackened fruit and leaf lesions.",
+    "Apple - Brown Spot": "Fungal infection resulting in brown patches on leaves and fruit.",
+    "Apple - Gray Spot": "A disease causing grayish moldy spots on apple leaves.",
+    "Apple - Healthy": "No signs of disease — healthy apple leaf.",
+    "Apple - Rust": "Bright orange spots on leaves caused by fungal rust pathogens.",
+    "Apple - Scab": "Dark, scabby lesions caused by Venturia inaequalis fungus.",
+    
+    "Bell Pepper - Bacterial Spot": "Causes water-soaked spots that turn brown or black; common in humid conditions.",
+    "Bell Pepper - Healthy": "No visible signs of disease or pest damage.",
+
+    "Blueberry - Healthy": "Healthy blueberry foliage with no disease symptoms.",
+
+    "Cassava - Bacterial Blight": "Serious disease causing wilting, spotting, and dieback of leaves.",
+    "Cassava - Brown Streak Disease": "Causes streaks and root necrosis, leading to yield loss.",
+    "Cassava - Green Mottle": "Leads to green mottling and distortion of cassava leaves.",
+    "Cassava - Healthy": "No disease present — normal cassava leaf.",
+    "Cassava - Mosaic Disease": "Virus-caused patterning and stunted growth of cassava.",
+
+    "Cherry - Healthy": "No disease detected — healthy cherry leaf.",
+    "Cherry - Powdery Mildew": "White, powdery fungal growth on leaf surfaces.",
+
+    "Coffee - Healthy": "Leaf appears normal and disease-free.",
+    "Coffee - Red Spider Mite": "Tiny mites that cause leaf discoloration and speckling.",
+    "Coffee - Rust": "Causes yellow-orange rust spots, reducing yield and quality.",
+
+    "Corn - Common Rust": "Reddish-brown pustules form on leaves, caused by Puccinia sorghi.",
+    "Corn - Gray Leaf Spot": "Creates rectangular gray lesions on leaves, reducing photosynthesis.",
+    "Corn - Healthy": "Corn plant with no signs of disease.",
+    "Corn - Northern Leaf Blight": "Elongated gray-green lesions caused by Setosphaeria turcica.",
+
+    "Grape - Black Measles": "A fungal disease that leads to black lesions and dried shoots.",
+    "Grape - Black Rot": "Fungal infection causing black spots and fruit rot.",
+    "Grape - Healthy": "Grape leaf free from any diseases.",
+    "Grape - Leaf Blight": "Irregular brown spots on leaves, affecting photosynthesis.",
+
+    "Orange - Citrus Greening": "Bacterial disease causing yellow shoots, bitter fruit, and dieback.",
+
+    "Peach - Bacterial Spot": "Small, water-soaked lesions that become dark and sunken.",
+    "Peach - Healthy": "No disease detected in peach foliage.",
+
+    "Potato - Bacterial Wilt": "Causes wilting and browning due to Ralstonia bacteria.",
+    "Potato - Early Blight": "Brown spots with concentric rings caused by Alternaria solani.",
+    "Potato - Healthy": "Disease-free, healthy potato leaf.",
+    "Potato - Late Blight": "Serious disease causing dark lesions and rapid rot.",
+    "Potato - Leafroll Virus": "Virus that curls leaves upward and reduces yield.",
+    "Potato - Mosaic Virus": "Mosaic pattern on leaves, often causing stunted growth.",
+    "Potato - Nematode": "Microscopic worms that damage roots and affect plant health.",
+    "Potato - Pests": "Insect pests damaging foliage and tubers.",
+    "Potato - Phytophthora": "Fungal infection leading to root and stem rot.",
+    "Potato - Spindle Tuber Viroid": "Stunted plants with narrow, upright leaves.",
+
+    "Raspberry - Healthy": "No disease symptoms observed on raspberry leaf.",
+
+    "Rice - Bacterial Blight": "Yellowing and drying of leaves due to bacterial infection.",
+    "Rice - Blast": "Causes elliptical lesions and can severely reduce yield.",
+    "Rice - Brown Spot": "Circular brown spots on leaves and grains.",
+    "Rice - Tungro": "Virus spread by leafhoppers, stunting and discoloring rice plants.",
+
+    "Rose - Healthy": "Healthy rose foliage without fungal or insect damage.",
+    "Rose - Rust": "Rust-colored spores on the underside of leaves.",
+    "Rose - Slug Sawfly": "Larvae that skeletonize leaves and create feeding holes.",
+
+    "Soybean - Healthy": "Leaf is healthy with no disease or pest effects.",
+
+    "Squash - Powdery Mildew": "White fungal growth on both sides of leaves.",
+
+    "Strawberry - Healthy": "Healthy strawberry plant with no visible issues.",
+    "Strawberry - Leaf Scorch": "Dark spots and leaf curling caused by fungus.",
+
+    "Sugercane - Healthy": "No signs of disease in the sugarcane leaf.",
+    "Sugercane - Mosaic": "Virus infection showing mottled leaf patterns.",
+    "Sugercane - Red Rot": "Causes red discoloration and foul odor in stalks.",
+    "Sugercane - Rust": "Orange pustules appear on leaves due to fungal infection.",
+    "Sugercane - Yellow Leaf": "Yellowing of midribs, usually due to virus infection.",
+
+    "Tomato - Bacterial Spot": "Spots that are dark and greasy-looking, reducing leaf area.",
+    "Tomato - Early Blight": "Brown spots with concentric rings, commonly on older leaves.",
+    "Tomato - Healthy": "No issues detected — healthy tomato leaf.",
+    "Tomato - Late Blight": "Water-soaked lesions, often with white fungal growth on edges.",
+    "Tomato - Leaf Curl": "Viral disease causing curling and stunting.",
+    "Tomato - Leaf Mold": "Yellow spots on top, moldy growth underneath the leaf.",
+    "Tomato - Mosaic Virus": "Causes mottled yellowing and malformed leaves.",
+    "Tomato - Septoria Leaf Spot": "Small circular spots with dark borders and gray centers.",
+    "Tomato - Spider Mites": "Tiny pests that cause speckled yellowing and webbing.",
+    "Tomato - Target Spot": "Concentric ring spots on leaves and fruit.",
+    
+    "Watermelon - Anthracnose": "Dark, sunken spots on leaves and fruit caused by fungus.",
+    "Watermelon - Downy Mildew": "Yellow angular spots with purplish mold on underside.",
+    "Watermelon - Healthy": "No visible disease on the watermelon leaf.",
+    "Watermelon - Mosaic Virus": "Mottled patterns on leaves, stunted growth."
+}
+
+# **Prediction Route**
+@app.route('/predict', methods=['POST'])
+def predict():
+    if 'file' not in request.files:
+        return render_template("index.html", prediction="No file uploaded!", image_url=None)
+
+    file = request.files['file']
+
+    # Ensure a file was selected
+    if file.filename == '':
+        return render_template("index.html", prediction="No file selected!", image_url=None)
+
+    # Save and process the uploaded image
+    filename = str(uuid.uuid4()) + ".jpg"
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(file_path)
+
+    # Process the image for model prediction
+    image = Image.open(file_path)
+    image = transform(image).unsqueeze(0)
+
+    with torch.no_grad():
+        output = model(image)
+        predicted_class_index = torch.argmax(output, 1).item()
+        predicted_class_name = class_names[predicted_class_index]
+
+    # ✅ Get description from dictionary
+    description = disease_descriptions.get(predicted_class_name, "Description not available.")
+
+    # ✅ Pass both prediction, description, and image path to the template
+    return render_template("index.html", 
+                           prediction=predicted_class_name,
+                           description=description,
+                           image_url=f"/uploads/{filename}")
+
+
+if __name__ == '__main__':
+    app.run(debug=True)

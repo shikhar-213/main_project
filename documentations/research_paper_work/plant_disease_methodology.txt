@@ -1,0 +1,64 @@
+Methodology
+
+1. Data Collection and Preprocessing
+
+1.1 Dataset Selection
+For this study, we utilized the PlantDoc dataset and PlantVillage dataset, which contain a diverse collection of plant leaf images categorized into multiple disease classes and healthy leaf samples. The dataset consists of over 100,000 images distributed across 72 plant disease classes.
+
+1.2 Data Augmentation
+To enhance model generalization and reduce overfitting, we applied various data augmentation techniques, including:
+- Rotation (±20 degrees)
+- Flipping (horizontal and vertical)
+- Zooming (0.8x–1.2x scale)
+- Brightness and contrast adjustments
+- Gaussian noise addition
+
+These augmentations increase the variability of the dataset, ensuring robustness in real-world applications.
+
+2. Model Selection and Implementation
+
+2.1 Deep Learning-Based Model: CNN and YOLOv8
+We implemented two deep learning architectures to analyze their effectiveness in plant disease classification:
+
+2.1.1 Convolutional Neural Network (CNN)
+- Architecture: A multi-layer CNN with convolutional layers, batch normalization, ReLU activation, and fully connected layers.
+- Pre-trained Models Used: VGG16, ResNet50, InceptionV3 for feature extraction.
+- Optimization: Adam optimizer with categorical cross-entropy loss.
+
+2.1.2 YOLOv8 for Object Detection
+- Architecture: YOLOv8 is used for real-time detection of diseased and healthy leaves.
+- Training Parameters:
+  - Input image size: 640×640 pixels
+  - Batch size: 32
+  - Epochs: 100
+  - Learning rate: 0.001
+- Bounding Box Annotations: The dataset was labeled using Roboflow to mark disease-affected regions.
+
+3. Machine Learning-Based Approaches: SVM and XGBoost
+To compare deep learning performance with traditional machine learning models, we implemented Support Vector Machine (SVM) and XGBoost:
+- SVM: Used Histogram of Oriented Gradients (HOG) and Color Histograms as feature extractors.
+- XGBoost: Trained on handcrafted features extracted from images.
+
+4. Model Training and Evaluation
+
+4.1 Training Process
+- The dataset was split into 80% training, 10% validation, and 10% testing.
+- All models were trained using TensorFlow and PyTorch frameworks.
+- Early stopping was applied to prevent overfitting.
+
+4.2 Evaluation Metrics
+Models were assessed using the following performance metrics:
+- Accuracy (ACC): Measures correct classifications.
+- Precision (PRE): Measures the correctness of positive predictions.
+- Recall (REC): Measures sensitivity to identifying diseased leaves.
+- F1-score: Harmonic mean of precision and recall.
+- Mean Average Precision (mAP): Used for YOLOv8 performance.
+
+5. Deployment on Local Web Application
+A Flask-based web application was developed to enable real-time plant disease detection using the trained models.
+- Frontend: HTML, CSS, JavaScript.
+- Backend: Python (Flask) for model inference.
+- User Input: Users can upload leaf images for instant classification.
+
+6. Comparative Analysis and Discussion
+A comparative study was conducted to evaluate CNN, YOLOv8, SVM, and XGBoost based on accuracy, processing speed, and computational efficiency. The results provide insights into the most suitable approach for real-world plant disease detection applications.
